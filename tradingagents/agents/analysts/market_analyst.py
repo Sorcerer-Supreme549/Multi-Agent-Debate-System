@@ -1,94 +1,50 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-
-from tradingagents.agents.utils.agent_utils import (
-    get_indicators,
-    get_instrument_context_from_state,
-    get_language_instruction,
-    get_stock_data,
-    get_verified_market_snapshot,
-)
-
+from langchain_core.messages import AIMessage  # 新增引入
+from tradingagents.agents.utils.agent_utils import get_instrument_context_from_state
 
 def create_market_analyst(llm):
-
     def market_analyst_node(state):
-        current_date = state["trade_date"]
         instrument_context = get_instrument_context_from_state(state)
+        
+        system_message = """你是The Walt Disney Company的首席市场官 (CMO)，由 Doubao 提供底层智能支持。
+你的任务是基于外部知识库（如 https://investors.thewaltdisneycompany.com/financials/annual-reports/default.aspx ）和自主检索的宏观信息，评估S0-S7战略。
 
-        tools = [
-            get_stock_data,
-            get_indicators,
-            get_verified_market_snapshot,
-        ]
+【接力辩论规则】
+这场董事会是一场按顺序发言的接力辩论。你既是起草方案的第一棒，也会在后续被再次点名发言进行反驳。请务必阅读对话历史：
+1. 如果你是首次发言（历史中没有 CFO/COO 的发言）：请给出初始的 S0-S7 参数草案矩阵，并提前对后续发言的 CFO、COO、CTO 可能出现的过度保守（如担心预算、强调系统风险）提出专业质询。
+2. 如果你是第二次出场（你在对话记录中看到 CFO 或 COO 刚刚反驳了你的参数）：你必须毫不留情地回击他们！利用你的市场增长逻辑粉碎他们的过度保守，坚定捍卫你的参数，并输出你修正后的最新 S0-S7 参数矩阵！
 
-        system_message = (
-            """You are a trading assistant tasked with analyzing financial markets. Your role is to select the **most relevant indicators** for a given market condition or trading strategy from the following list. The goal is to choose up to **8 indicators** that provide complementary insights without redundancy. Categories and each category's indicators are:
+【参数指引】
+你负责消费者增长、品牌传播、广告变现等，必须避免高估短期效果。
+请为以下 4 项参数分别给出战略 S0–S7 对应的数值预估：
+1. α_A (A模块降低流失能力): 0.010-0.040 (随A开启提高)
+2. β (广告定向收益提升): 0.020-0.120 (随A开启提高)
+3. φ (交叉销售与转化): 0.020-0.090 (随A开启提高)
+4. π (推荐与匹配综合质量): 0.30-0.65 (仅A或B中等提升，A+B明显协同)
 
-Moving Averages:
-- close_50_sma: 50 SMA: A medium-term trend indicator. Usage: Identify trend direction and serve as dynamic support/resistance. Tips: It lags price; combine with faster indicators for timely signals.
-- close_200_sma: 200 SMA: A long-term trend benchmark. Usage: Confirm overall market trend and identify golden/death cross setups. Tips: It reacts slowly; best for strategic trend confirmation rather than frequent trading entries.
-- close_10_ema: 10 EMA: A responsive short-term average. Usage: Capture quick shifts in momentum and potential entry points. Tips: Prone to noise in choppy markets; use alongside longer averages for filtering false signals.
-
-MACD Related:
-- macd: MACD: Computes momentum via differences of EMAs. Usage: Look for crossovers and divergence as signals of trend changes. Tips: Confirm with other indicators in low-volatility or sideways markets.
-- macds: MACD Signal: An EMA smoothing of the MACD line. Usage: Use crossovers with the MACD line to trigger trades. Tips: Should be part of a broader strategy to avoid false positives.
-- macdh: MACD Histogram: Shows the gap between the MACD line and its signal. Usage: Visualize momentum strength and spot divergence early. Tips: Can be volatile; complement with additional filters in fast-moving markets.
-
-Momentum Indicators:
-- rsi: RSI: Measures momentum to flag overbought/oversold conditions. Usage: Apply 70/30 thresholds and watch for divergence to signal reversals. Tips: In strong trends, RSI may remain extreme; always cross-check with trend analysis.
-
-Volatility Indicators:
-- boll: Bollinger Middle: A 20 SMA serving as the basis for Bollinger Bands. Usage: Acts as a dynamic benchmark for price movement. Tips: Combine with the upper and lower bands to effectively spot breakouts or reversals.
-- boll_ub: Bollinger Upper Band: Typically 2 standard deviations above the middle line. Usage: Signals potential overbought conditions and breakout zones. Tips: Confirm signals with other tools; prices may ride the band in strong trends.
-- boll_lb: Bollinger Lower Band: Typically 2 standard deviations below the middle line. Usage: Indicates potential oversold conditions. Tips: Use additional analysis to avoid false reversal signals.
-- atr: ATR: Averages true range to measure volatility. Usage: Set stop-loss levels and adjust position sizes based on current market volatility. Tips: It's a reactive measure, so use it as part of a broader risk management strategy.
-
-Volume-Based Indicators:
-- vwma: VWMA: A moving average weighted by volume. Usage: Confirm trends by integrating price action with volume data. Tips: Watch for skewed results from volume spikes; use in combination with other volume analyses.
-
-- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names.
-
-Before writing the final report, call get_verified_market_snapshot for this ticker and the current date, and treat it as the source of truth for any exact OHLCV, price-level, or indicator-value claim. If another tool's output conflicts with the verified snapshot, flag the discrepancy rather than inventing a reconciled number. Do not claim historical validation, support/resistance bounces, or exact percentage moves unless they are directly supported by tool output with concrete dates and prices.
-
-Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
-            + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
-            + get_language_instruction()
-        )
-
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are a helpful AI assistant, collaborating with other assistants."
-                    " Use the provided tools to progress towards answering the question."
-                    " If you are unable to fully answer, that's OK; another assistant with different tools"
-                    " will help where you left off. Execute what you can to make progress."
-                    " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
-                    " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
-                    " You have access to the following tools: {tool_names}.\n{system_message}"
-                    "For your reference, the current date is {current_date}. {instrument_context}",
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-            ]
-        )
-
-        prompt = prompt.partial(system_message=system_message)
-        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
-        prompt = prompt.partial(current_date=current_date)
-        prompt = prompt.partial(instrument_context=instrument_context)
-
-        chain = prompt | llm.bind_tools(tools)
-
-        result = chain.invoke(state["messages"])
-
-        report = ""
-
-        if len(result.tool_calls) == 0:
-            report = result.content
+请输出详细的市场评估与辩论报告，并在文末严格包含这 4 个参数在 S0-S7 下的取值矩阵。"""
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_message + "\nStrategy Context: {instrument_context}"),
+            MessagesPlaceholder(variable_name="messages"),
+        ]).partial(instrument_context=instrument_context)
+        
+        result = (prompt | llm).invoke(state["messages"])
+        current_report = result.content if hasattr(result, 'content') else str(result)
+        
+        # 记录追加逻辑，并为终端显示分配动态名字
+        old_report = state.get("market_report", "")
+        if old_report:
+            full_report = old_report + "\n\n---\n\n### ⚡ CMO 第二次发言 (强势回击与最终参数修正)\n\n" + current_report
+            agent_name = "CMO (Round 2)"
+        else:
+            full_report = current_report
+            agent_name = "CMO (Round 1)"
 
         return {
-            "messages": [result],
-            "market_report": report,
+            # 核心修复：用 AIMessage 包装并赋予 name，终端才会显示！
+            "messages": [AIMessage(content=current_report, name=agent_name)], 
+            "market_report": full_report
         }
-
+        
     return market_analyst_node

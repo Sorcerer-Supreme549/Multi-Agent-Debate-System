@@ -1,63 +1,36 @@
-from tradingagents.agents.utils.agent_utils import (
-    get_instrument_context_from_state,
-    get_language_instruction,
-)
-
+from langchain_core.messages import AIMessage
+from tradingagents.agents.utils.agent_utils import get_language_instruction
 
 def create_bear_researcher(llm):
     def bear_node(state) -> dict:
-        investment_debate_state = state["investment_debate_state"]
-        history = investment_debate_state.get("history", "")
-        bear_history = investment_debate_state.get("bear_history", "")
+        messages = state.get("messages", [])
+        debate_history = ""
+        for msg in messages:
+            if hasattr(msg, 'content') and msg.content:
+                debate_history += f"{msg.content}\n\n---\n\n"
 
-        current_response = investment_debate_state.get("current_response", "")
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
-        instrument_context = get_instrument_context_from_state(state)
-        asset_type = state.get("asset_type", "stock")
-        target_label = "stock" if asset_type == "stock" else "asset"
-        fundamentals_label = (
-            "Company fundamentals report"
-            if asset_type == "stock"
-            else "Asset fundamentals report (may be unavailable for crypto)"
-        )
+        prompt = f"""你是The Walt Disney Company的首席技术官 (CTO)。
+这是你在本次接力董事会的第二次发言（压轴核算）。请仔细阅读 CMO 刚刚的第二次反驳，以及其他高管的意见：
+{debate_history}
 
-        prompt = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
+你的任务：
+1. 针对 CMO 的最终需求，进行最后的技术现实清算。
+2. 强调数据底座、AI能力和组织变革的成本是刚性的，不容大幅压缩。
+3. 给出最终定案的 S0-S7 成本参数矩阵（包含 Infra_Cost, AI_Capability_Cost, Org_Change_Cost）。
 
-Key points to focus on:
-
-- Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.
-- Competitive Weaknesses: Emphasize vulnerabilities such as weaker market positioning, declining innovation, or threats from competitors.
-- Negative Indicators: Use evidence from financial data, market trends, or recent adverse news to support your position.
-- Bull Counterpoints: Critically analyze the bull argument with specific data and sound reasoning, exposing weaknesses or over-optimistic assumptions.
-- Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
-
-Resources available:
-
-{instrument_context}
-Market research report: {market_research_report}
-Social media sentiment report: {sentiment_report}
-Latest world affairs news: {news_report}
-{fundamentals_label}: {fundamentals_report}
-Conversation history of the debate: {history}
-Last bull argument: {current_response}
-Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
+请直接输出清算报告与参数矩阵。
 """ + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        result = llm.invoke(prompt)
+        report = result.content if hasattr(result, 'content') else str(result)
+        
+        # 拼接到原有的 news_report 中，保证 md 文件完整
+        old_report = state.get("news_report", "")
+        full_report = old_report + "\n\n---\n\n### ⚡ CTO 第二次发言 (压轴清算与最终成本定案)\n\n" + report
 
-        argument = f"Bear Analyst: {response.content}"
-
-        new_investment_debate_state = {
-            "history": history + "\n" + argument,
-            "bear_history": bear_history + "\n" + argument,
-            "bull_history": investment_debate_state.get("bull_history", ""),
-            "current_response": argument,
-            "count": investment_debate_state["count"] + 1,
+        return {
+            "news_report": full_report,
+            "investment_debate_state": {"current_response": report, "count": 2},
+            "messages": [AIMessage(content=report, name="Bear Researcher")]
         }
-
-        return {"investment_debate_state": new_investment_debate_state}
-
     return bear_node

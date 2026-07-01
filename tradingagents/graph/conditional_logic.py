@@ -49,15 +49,19 @@ class ConditionalLogic:
             return "tools_fundamentals"
         return "Msg Clear Fundamentals"
 
-    def should_continue_debate(self, state: AgentState) -> str:
+    def should_continue_debate(self, state) -> str:
         """Determine if debate should continue."""
 
+        # 检查是否达到最大辩论回合数
         if (
             state["investment_debate_state"]["count"] >= 2 * self.max_debate_rounds
-        ):  # 3 rounds of back-and-forth between 2 agents
-            return "Research Manager"
+        ):  
+            return "Research Manager" # 辩论结束，提交给书记员/汇报员
+            
+        # 核心修复：因为我们在 Agent 里加回了 "Bull Analyst:" 前缀伪装，所以这里必须匹配 "Bull"
         if state["investment_debate_state"]["current_response"].startswith("Bull"):
             return "Bear Researcher"
+            
         return "Bull Researcher"
 
     def should_continue_risk_analysis(self, state: AgentState) -> str:

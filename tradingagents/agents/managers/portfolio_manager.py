@@ -1,92 +1,75 @@
-"""Portfolio Manager: synthesises the risk-analyst debate into the final decision.
-
-Uses LangChain's ``with_structured_output`` so the LLM produces a typed
-``PortfolioDecision`` directly, in a single call.  The result is rendered
-back to markdown for storage in ``final_trade_decision`` so memory log,
-CLI display, and saved reports continue to consume the same shape they do
-today.  When a provider does not expose structured output, the agent falls
-back gracefully to free-text generation.
-"""
-
 from __future__ import annotations
-
-from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
-from tradingagents.agents.utils.agent_utils import (
-    get_instrument_context_from_state,
-    get_language_instruction,
-)
-from tradingagents.agents.utils.structured import (
-    bind_structured,
-    invoke_structured_or_freetext,
-)
-
+import json
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate
+from tradingagents.agents.utils.agent_utils import get_instrument_context_from_state
 
 def create_portfolio_manager(llm):
-    structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
-
     def portfolio_manager_node(state) -> dict:
         instrument_context = get_instrument_context_from_state(state)
+        
+        # ==========================================
+        # 核心操作：抽取底层最真实的 7 步流转对话记录
+        # ==========================================
+        messages = state.get("messages", [])
+        real_time_history = ""
+        step_counter = 1
+        
+        # 遍历所有底层消息，提取高管们的真实辩论内容
+        for msg in messages:
+            if hasattr(msg, 'content') and msg.content:
+                # 过滤掉系统短消息，只保留高管的论战长文
+                if len(str(msg.content)) > 50:
+                    real_time_history += f"#### 【第 {step_counter} 棒辩论现场】\n{msg.content}\n\n---\n\n"
+                    step_counter += 1
 
-        history = state["risk_debate_state"]["history"]
-        risk_debate_state = state["risk_debate_state"]
-        research_plan = state["investment_plan"]
-        trader_plan = state["trader_investment_plan"]
+        # ==========================================
+        # CEO 裁决逻辑
+        # ==========================================
+        system_message = """你是The Walt Disney Company的首席执行官兼战略投资委员会主席 Bob Iger。
+你的任务是整合各方观点，终审输出 2026年 S0-S7 战略的最终参数矩阵。"""
+        
+        prompt_text = f"""
+【会议完整录音】：
+{real_time_history}
 
-        past_context = state.get("past_context", "")
-        lessons_line = (
-            f"- Lessons from prior decisions and outcomes:\n{past_context}\n"
-            if past_context
-            else ""
+【战略背景】：{instrument_context}
+
+作为 CEO，请执行以下流程：
+第一部分：董事会观点整合与决策过程
+请根据会议记录，总结 CMO、CFO、COO、CTO 关于收益与成本的激烈分歧。明确指出你在哪些参数上支持了 CMO，在哪些参数上采纳了 CFO/CTO 的成本把控，并阐述你进行裁决的商业逻辑。
+
+第二部分：最终参数矩阵
+在分析之后，输出一个包含完整 S0-S7 参数的标准 JSON 矩阵（使用 ```json 块包围）。
+必须包含 "S0" 到 "S7" 的 keys，且每个均包含 15 个参数。
+"""
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_message),
+            ("user", prompt_text)
+        ])
+        
+        result = (prompt | llm).invoke({})
+        ceo_verdict = result.content if hasattr(result, 'content') else str(result)
+
+        # ==========================================
+        # 终极修复：把会议录音带和 CEO 裁决物理缝合
+        # 这样无论框架怎么渲染，这份报告永远是按时间顺序展现的！
+        # ==========================================
+        full_final_report = (
+            "## 🎬 迪士尼 2026 战略董事会：7 步接力圆桌会议全纪要\n"
+            "*(以下内容严格按照 CMO -> CFO -> CTO -> COO -> CMO -> CTO 的真实发言顺序记录)*\n\n"
+            f"{real_time_history}\n\n"
+            "## 👑 CEO (Bob Iger) 最终整合与裁决\n\n"
+            f"{ceo_verdict}"
         )
 
-        prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
-
-{instrument_context}
-
----
-
-**Rating Scale** (use exactly one):
-- **Buy**: Strong conviction to enter or add to position
-- **Overweight**: Favorable outlook, gradually increase exposure
-- **Hold**: Maintain current position, no action needed
-- **Underweight**: Reduce exposure, take partial profits
-- **Sell**: Exit position or avoid entry
-
-**Context:**
-- Research Manager's investment plan: **{research_plan}**
-- Trader's transaction proposal: **{trader_plan}**
-{lessons_line}
-**Risk Analysts Debate History:**
-{history}
-
----
-
-Be decisive and ground every conclusion in specific evidence from the analysts.{get_language_instruction()}"""
-
-        final_trade_decision = invoke_structured_or_freetext(
-            structured_llm,
-            llm,
-            prompt,
-            render_pm_decision,
-            "Portfolio Manager",
-        )
-
-        new_risk_debate_state = {
-            "judge_decision": final_trade_decision,
-            "history": risk_debate_state["history"],
-            "aggressive_history": risk_debate_state["aggressive_history"],
-            "conservative_history": risk_debate_state["conservative_history"],
-            "neutral_history": risk_debate_state["neutral_history"],
-            "latest_speaker": "Judge",
-            "current_aggressive_response": risk_debate_state["current_aggressive_response"],
-            "current_conservative_response": risk_debate_state["current_conservative_response"],
-            "current_neutral_response": risk_debate_state["current_neutral_response"],
-            "count": risk_debate_state["count"],
-        }
+        new_risk_debate_state = state.get("risk_debate_state", {})
+        new_risk_debate_state["judge_decision"] = full_final_report
 
         return {
             "risk_debate_state": new_risk_debate_state,
-            "final_trade_decision": final_trade_decision,
+            "final_trade_decision": full_final_report,
+            "messages": [AIMessage(content=full_final_report, name="Portfolio Manager")]
         }
 
     return portfolio_manager_node

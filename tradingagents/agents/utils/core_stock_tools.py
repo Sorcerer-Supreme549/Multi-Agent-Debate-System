@@ -1,24 +1,21 @@
-from typing import Annotated
-
+import pandas as pd
+import os
 from langchain_core.tools import tool
-
-from tradingagents.dataflows.interface import route_to_vendor
-
+from typing import Annotated
 
 @tool
 def get_stock_data(
-    symbol: Annotated[str, "ticker symbol of the company"],
-    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
-    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+    symbol: Annotated[str, "The strategy ID or symbol"],
+    start_date: Annotated[str, "Start date"],
+    end_date: Annotated[str, "End date"],
 ) -> str:
     """
-    Retrieve stock price data (OHLCV) for a given ticker symbol.
-    Uses the configured core_stock_apis vendor.
-    Args:
-        symbol (str): Ticker symbol of the company, e.g. AAPL, TSM
-        start_date (str): Start date in yyyy-mm-dd format
-        end_date (str): End date in yyyy-mm-dd format
-    Returns:
-        str: A formatted dataframe containing the stock price data for the specified ticker symbol in the specified date range.
+    Retrieve baseline parameters for the given strategy.
     """
-    return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+    try:
+        # 强制读取本地文件，无视网络！
+        file_path = os.path.join(os.getcwd(), "disney_baseline.csv")
+        df = pd.read_csv(file_path, index_col='Date', parse_dates=True)
+        return df.to_string()
+    except Exception as e:
+        return f"Failed to read local baseline data: {e}"
